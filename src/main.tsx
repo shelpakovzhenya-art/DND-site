@@ -77,13 +77,15 @@ if (!app) {
 }
 
 const STORAGE = {
-  records: 'aisol-pathfinder-records-v1',
+  records: 'aisol-pathfinder-record-edits-v2',
   characters: 'aisol-pathfinder-characters-v1',
   favourites: 'aisol-pathfinder-favourites-v1',
   recent: 'aisol-pathfinder-recent-v1',
   rolls: 'aisol-pathfinder-rolls-v1',
   notes: 'aisol-pathfinder-notes-v1',
 }
+
+const LEGACY_RECORDS_KEY = 'aisol-pathfinder-records-v1'
 
 const FILTERS: Record<string, string[]> = {
   all: [],
@@ -355,6 +357,22 @@ function mergeRecordEdits(seedRecords: ArchiveRecord[], edits: ArchiveRecord[] |
   })
 
   return Array.from(merged.values())
+}
+
+function migrateLegacyRecordEdits(seedRecords: ArchiveRecord[]) {
+  const legacyRecords = readStorage<ArchiveRecord[] | null>(LEGACY_RECORDS_KEY, null)
+  if (!legacyRecords?.length) return null
+
+  const seedIds = new Set(seedRecords.map((item) => item.id))
+  const localRecords = legacyRecords.filter(
+    (item) => !seedIds.has(item.id) || item.sourceUrl === '/local/homebrew' || item.kind === 'Домашнее правило',
+  )
+
+  if (localRecords.length) {
+    writeStorage(STORAGE.records, localRecords)
+  }
+
+  return localRecords.length ? localRecords : null
 }
 
 function saveCharacters() {
@@ -1791,7 +1809,8 @@ async function bootstrap() {
   try {
     const response = await fetch(SEED_PATH)
     const seed = (await response.json()) as SeedPayload
-    const storedRecordEdits = readStorage<ArchiveRecord[] | null>(STORAGE.records, null)
+    const storedRecordEdits =
+      readStorage<ArchiveRecord[] | null>(STORAGE.records, null) || migrateLegacyRecordEdits(seed.records)
 
     state.seed = seed
     state.records = mergeRecordEdits(seed.records, storedRecordEdits)
