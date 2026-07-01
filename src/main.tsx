@@ -195,6 +195,9 @@ let diceBoxElement: HTMLElement | null = null
 let diceBoxReady: Promise<DiceBoxInstance | null> | null = null
 let diceRollToken = 0
 
+const DICE_INIT_TIMEOUT = 7000
+const DICE_ROLL_TIMEOUT = 11000
+
 function readStorage<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key)
@@ -449,6 +452,15 @@ function physicsNotation(notation: string, result: RollResult) {
   return `${count}d${sides}${mod}@${result.rolls.join(',')}`
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = window.setTimeout(() => reject(new Error(message)), ms)
+    promise
+      .then(resolve, reject)
+      .finally(() => window.clearTimeout(timeout))
+  })
+}
+
 async function ensureDiceBox() {
   const element = document.querySelector<HTMLElement>('#physicsDiceBox')
   if (!element) return null
@@ -462,8 +474,8 @@ async function ensureDiceBox() {
     .then(({ default: DiceBox }) => {
       diceBox = new DiceBox('#physicsDiceBox', {
         assetPath: '/assets/dice-box-threejs/',
-        sounds: true,
-        volume: 44,
+        sounds: false,
+        volume: 0,
         shadows: true,
         theme_surface: 'green-felt',
         theme_colorset: 'white',
@@ -479,11 +491,13 @@ async function ensureDiceBox() {
     .then(() => {
       element.classList.add('ready')
       element.closest('.dice-tray')?.classList.add('physics-ready')
+      element.closest('.dice-tray')?.classList.remove('physics-loading', 'physics-failed')
       return diceBox
     })
     .catch((error) => {
       element.classList.add('failed')
       element.closest('.dice-tray')?.classList.add('physics-failed')
+      element.closest('.dice-tray')?.classList.remove('physics-loading')
       console.warn('Dice engine failed', error)
       return null
     })
@@ -513,7 +527,7 @@ function patchDiceDomAfterRoll(result: RollResult) {
 
   if (!tray || !readout || !history || !historyCount) return false
 
-  tray.classList.remove('rolling', 'throw-1', 'throw-2', 'throw-3', 'throw-4')
+  tray.classList.remove('rolling', 'throw-1', 'throw-2', 'throw-3', 'throw-4', 'physics-loading')
   readout.innerHTML = `
     <span>${escapeHtml(result.notation)}</span>
     <strong>${result.total}</strong>
@@ -524,6 +538,34 @@ function patchDiceDomAfterRoll(result: RollResult) {
   if (sectionNotation) sectionNotation.textContent = result.notation
   if (miniTotal) miniTotal.textContent = String(result.total)
   miniDie?.classList.remove('rolling')
+
+  return true
+}
+
+function patchDiceDomBeforeRoll(result: RollResult) {
+  if (state.view !== 'dice') return false
+
+  const tray = document.querySelector('.dice-tray')
+  const readout = document.querySelector('.roll-readout')
+  const sectionNotation = document.querySelector('.dice-stage .section-heading b')
+  const input = document.querySelector<HTMLInputElement>('#diceForm input[name="notation"]')
+  const box = document.querySelector('#physicsDiceBox')
+  const miniDie = document.querySelector('.die-visual')
+
+  if (!tray || !readout || !box) return false
+
+  tray.classList.remove('throw-1', 'throw-2', 'throw-3', 'throw-4', 'physics-failed')
+  tray.classList.add('rolling', `throw-${state.rollVariant}`)
+  tray.classList.toggle('physics-ready', box.classList.contains('ready'))
+  tray.classList.toggle('physics-loading', !box.classList.contains('ready'))
+  if (sectionNotation) sectionNotation.textContent = result.notation
+  if (input) input.value = state.diceNotation
+  miniDie?.classList.add('rolling')
+  readout.innerHTML = `
+    <span>${escapeHtml(result.notation)}</span>
+    <strong aria-hidden="true"></strong>
+    <small>3D-кубик заряжается и бросается по физике</small>
+  `
 
   return true
 }
@@ -570,23 +612,40 @@ async function addRoll(notation: string) {
   state.rollingDisplay = result.total
   state.rollVariant = randomInt(4)
   const token = ++diceRollToken
-  render()
 
   const engineNotation = physicsNotation(normalized, result)
-  const engine = engineNotation ? await ensureDiceBox() : null
+  const keepDiceScene = Boolean(engineNotation && state.view === 'dice' && document.querySelector('#physicsDiceBox'))
+
+  if (!keepDiceScene || !patchDiceDomBeforeRoll(result)) {
+    render()
+  }
+
+  let engine: DiceBoxInstance | null = null
+  if (engineNotation) {
+    try {
+      engine = await withTimeout(ensureDiceBox(), DICE_INIT_TIMEOUT, 'Dice engine init timed out')
+    } catch (error) {
+      console.warn('Physics dice init failed or timed out', error)
+    }
+  }
+
   if (engine && token === diceRollToken) {
     try {
-      await engine.roll(engineNotation)
+      await withTimeout(engine.roll(engineNotation), DICE_ROLL_TIMEOUT, 'Physics dice roll timed out')
       completeRoll(result, token, true)
       return
     } catch (error) {
       console.warn('Physics dice roll failed, using fallback', error)
+      if (keepDiceScene) {
+        completeRoll(result, token, true)
+        return
+      }
     }
   }
 
   rollTimeout = window.setTimeout(() => {
-    completeRoll(result, token)
-  }, 1720)
+    completeRoll(result, token, keepDiceScene)
+  }, keepDiceScene ? 1200 : 1720)
 }
 
 function generateProblem() {

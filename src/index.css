@@ -1305,7 +1305,8 @@ label > span {
   transition: opacity 220ms ease;
 }
 
-.physics-dice-box.ready {
+.physics-dice-box.ready,
+.dice-tray.physics-loading .physics-dice-box {
   opacity: 1;
 }
 
@@ -1317,16 +1318,21 @@ label > span {
 
 .dice-tray.physics-ready .thrown-die,
 .dice-tray.physics-ready .die-shadow,
-.dice-tray.physics-ready .tray-impact {
+.dice-tray.physics-ready .tray-impact,
+.dice-tray.physics-loading .thrown-die,
+.dice-tray.physics-loading .die-shadow,
+.dice-tray.physics-loading .tray-impact {
   opacity: 0;
 }
 
+.dice-tray.physics-loading .roll-readout strong,
 .dice-tray.physics-ready.rolling .roll-readout strong {
   animation: none;
   opacity: 0;
 }
 
-.dice-tray.physics-ready .roll-readout {
+.dice-tray.physics-ready .roll-readout,
+.dice-tray.physics-loading .roll-readout {
   z-index: 6;
 }
 
