@@ -189,10 +189,39 @@ const state: AppState = {
 
 let rollTimeout: number | null = null
 type DiceBoxInstance = InstanceType<typeof DiceBoxType>
+type DiceSceneName = 'main' | 'mini'
 
-let diceBox: DiceBoxInstance | null = null
-let diceBoxElement: HTMLElement | null = null
-let diceBoxReady: Promise<DiceBoxInstance | null> | null = null
+type DiceScene = {
+  selector: string
+  rootSelector: string
+  baseScale: number
+  strength: number
+  box: DiceBoxInstance | null
+  element: HTMLElement | null
+  ready: Promise<DiceBoxInstance | null> | null
+}
+
+const diceScenes: Record<DiceSceneName, DiceScene> = {
+  main: {
+    selector: '#physicsDiceBox',
+    rootSelector: '.dice-tray',
+    baseScale: 82,
+    strength: 1.65,
+    box: null,
+    element: null,
+    ready: null,
+  },
+  mini: {
+    selector: '#miniPhysicsDiceBox',
+    rootSelector: '.mini-dice-stage',
+    baseScale: 46,
+    strength: 1.48,
+    box: null,
+    element: null,
+    ready: null,
+  },
+}
+
 let diceRollToken = 0
 
 const DICE_INIT_TIMEOUT = 7000
@@ -461,18 +490,22 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string) {
   })
 }
 
-async function ensureDiceBox() {
-  const element = document.querySelector<HTMLElement>('#physicsDiceBox')
+async function ensureDiceBox(sceneName: DiceSceneName = 'main') {
+  const scene = diceScenes[sceneName]
+  const element = document.querySelector<HTMLElement>(scene.selector)
   if (!element) return null
-  if (diceBox && diceBoxElement === element) return diceBox
-  if (diceBoxReady && diceBoxElement === element) return diceBoxReady
+  const root = element.closest<HTMLElement>(scene.rootSelector)
+  const rootRect = root?.getBoundingClientRect()
+  if (!rootRect || rootRect.width < 20 || rootRect.height < 20) return null
+  if (scene.box && scene.element === element) return scene.box
+  if (scene.ready && scene.element === element) return scene.ready
 
   element.innerHTML = ''
-  diceBoxElement = element
+  scene.element = element
 
-  diceBoxReady = import('@3d-dice/dice-box-threejs')
+  scene.ready = import('@3d-dice/dice-box-threejs')
     .then(({ default: DiceBox }) => {
-      diceBox = new DiceBox('#physicsDiceBox', {
+      scene.box = new DiceBox(scene.selector, {
         assetPath: '/assets/dice-box-threejs/',
         sounds: false,
         volume: 0,
@@ -482,27 +515,27 @@ async function ensureDiceBox() {
         theme_material: 'glass',
         gravity_multiplier: 430,
         light_intensity: 0.92,
-        baseScale: 82,
-        strength: 1.65,
+        baseScale: scene.baseScale,
+        strength: scene.strength,
       })
 
-      return diceBox.init ? diceBox.init() : diceBox.initialize()
+      return scene.box.init ? scene.box.init() : scene.box.initialize()
     })
     .then(() => {
       element.classList.add('ready')
-      element.closest('.dice-tray')?.classList.add('physics-ready')
-      element.closest('.dice-tray')?.classList.remove('physics-loading', 'physics-failed')
-      return diceBox
+      root.classList.add('physics-ready')
+      root.classList.remove('physics-loading', 'physics-failed')
+      return scene.box
     })
     .catch((error) => {
       element.classList.add('failed')
-      element.closest('.dice-tray')?.classList.add('physics-failed')
-      element.closest('.dice-tray')?.classList.remove('physics-loading')
+      root.classList.add('physics-failed')
+      root.classList.remove('physics-loading')
       console.warn('Dice engine failed', error)
       return null
     })
 
-  return diceBoxReady
+  return scene.ready
 }
 
 function renderRollHistoryRow(roll: RollResult) {
@@ -570,17 +603,61 @@ function patchDiceDomBeforeRoll(result: RollResult) {
   return true
 }
 
-function completeRoll(result: RollResult, token: number, preserveDice = false) {
+function patchMiniDiceDomBeforeRoll(result: RollResult) {
+  const stage = document.querySelector<HTMLElement>('.mini-dice-stage')
+  const box = document.querySelector('#miniPhysicsDiceBox')
+  const miniDie = document.querySelector('.dice-mini .die-visual')
+  const miniNotation = document.querySelector('.dice-mini .die-visual span')
+  const miniTotal = document.querySelector('.dice-mini .die-visual strong')
+
+  if (!stage || !box || !miniDie || !miniNotation || !miniTotal) return false
+
+  stage.classList.remove('throw-1', 'throw-2', 'throw-3', 'throw-4', 'physics-failed')
+  stage.classList.add('rolling', `throw-${state.rollVariant}`)
+  stage.classList.toggle('physics-ready', box.classList.contains('ready'))
+  stage.classList.toggle('physics-loading', !box.classList.contains('ready'))
+  miniDie.classList.add('rolling')
+  miniNotation.textContent = diceSidesLabel(result.notation)
+  miniTotal.textContent = ''
+
+  return true
+}
+
+function patchMiniDiceDomAfterRoll(result: RollResult) {
+  const stage = document.querySelector<HTMLElement>('.mini-dice-stage')
+  const box = document.querySelector('#miniPhysicsDiceBox')
+  const miniDie = document.querySelector('.dice-mini .die-visual')
+  const miniNotation = document.querySelector('.dice-mini .die-visual span')
+  const miniTotal = document.querySelector('.dice-mini .die-visual strong')
+
+  if (!stage || !miniDie || !miniNotation || !miniTotal) return false
+
+  stage.classList.remove('rolling', 'throw-1', 'throw-2', 'throw-3', 'throw-4', 'physics-loading')
+  stage.classList.toggle('physics-ready', Boolean(box?.classList.contains('ready')))
+  miniDie.classList.remove('rolling')
+  miniNotation.textContent = diceSidesLabel(result.notation)
+  miniTotal.textContent = String(result.total)
+
+  return true
+}
+
+function completeRoll(result: RollResult, token: number, preserveDice: DiceSceneName | null = null) {
   if (token !== diceRollToken) return
   rollTimeout = null
   state.rolling = false
   state.rollingDisplay = result.total
   state.rolls = [result, ...state.rolls].slice(0, 14)
   writeStorage(STORAGE.rolls, state.rolls)
-  if (!preserveDice || !patchDiceDomAfterRoll(result)) render()
+  if (preserveDice) {
+    const mainPatched = state.view !== 'dice' || patchDiceDomAfterRoll(result)
+    const miniPatched = patchMiniDiceDomAfterRoll(result)
+    if (mainPatched && miniPatched) return
+  }
+
+  render()
 }
 
-async function addRoll(notation: string) {
+async function addRoll(notation: string, preferredScene: DiceSceneName = state.view === 'dice' ? 'main' : 'mini') {
   const normalized = notation.replace(/\s+/g, '').toLowerCase()
   const match = normalized.match(/^(\d*)d(\d+)([+-]\d+)?$/)
 
@@ -614,16 +691,36 @@ async function addRoll(notation: string) {
   const token = ++diceRollToken
 
   const engineNotation = physicsNotation(normalized, result)
-  const keepDiceScene = Boolean(engineNotation && state.view === 'dice' && document.querySelector('#physicsDiceBox'))
+  const mainSceneAvailable = Boolean(engineNotation && state.view === 'dice' && document.querySelector('#physicsDiceBox'))
+  const miniSceneAvailable = Boolean(engineNotation && document.querySelector('#miniPhysicsDiceBox'))
+  const targetScene =
+    preferredScene === 'main'
+      ? mainSceneAvailable
+        ? 'main'
+        : miniSceneAvailable
+          ? 'mini'
+          : null
+      : miniSceneAvailable
+        ? 'mini'
+        : mainSceneAvailable
+          ? 'main'
+          : null
 
-  if (!keepDiceScene || !patchDiceDomBeforeRoll(result)) {
+  const patchedBefore =
+    targetScene === 'main'
+      ? patchDiceDomBeforeRoll(result) && patchMiniDiceDomBeforeRoll(result)
+      : targetScene === 'mini'
+        ? patchMiniDiceDomBeforeRoll(result)
+        : false
+
+  if (!targetScene || !patchedBefore) {
     render()
   }
 
   let engine: DiceBoxInstance | null = null
-  if (engineNotation) {
+  if (engineNotation && targetScene) {
     try {
-      engine = await withTimeout(ensureDiceBox(), DICE_INIT_TIMEOUT, 'Dice engine init timed out')
+      engine = await withTimeout(ensureDiceBox(targetScene), DICE_INIT_TIMEOUT, 'Dice engine init timed out')
     } catch (error) {
       console.warn('Physics dice init failed or timed out', error)
     }
@@ -632,20 +729,20 @@ async function addRoll(notation: string) {
   if (engine && token === diceRollToken) {
     try {
       await withTimeout(engine.roll(engineNotation), DICE_ROLL_TIMEOUT, 'Physics dice roll timed out')
-      completeRoll(result, token, true)
+      completeRoll(result, token, targetScene)
       return
     } catch (error) {
       console.warn('Physics dice roll failed, using fallback', error)
-      if (keepDiceScene) {
-        completeRoll(result, token, true)
+      if (targetScene) {
+        completeRoll(result, token, targetScene)
         return
       }
     }
   }
 
   rollTimeout = window.setTimeout(() => {
-    completeRoll(result, token, keepDiceScene)
-  }, keepDiceScene ? 1200 : 1720)
+    completeRoll(result, token, targetScene)
+  }, targetScene ? 1200 : 1720)
 }
 
 function generateProblem() {
@@ -722,6 +819,8 @@ function renderSidebar() {
 
   const lastRoll = state.rolls[0]
   const result = state.rolling ? state.rollingDisplay : lastRoll?.total ?? 19
+  const miniNotation = state.rolling ? state.rollingNotation : lastRoll?.notation || state.diceNotation
+  const miniStageClass = `mini-dice-stage${state.rolling ? ` rolling throw-${state.rollVariant}` : ''}`
 
   return `
     <aside class="left-rail">
@@ -747,10 +846,13 @@ function renderSidebar() {
           <span>Бросок кубиков</span>
           <button type="button" data-roll="${state.diceNotation}" title="Повторить">↻</button>
         </div>
-        <button class="die-visual ${state.rolling ? 'rolling' : ''}" type="button" data-view="dice" aria-label="Открыть кубики">
-          <span>d20</span>
-          <strong>${result}</strong>
-        </button>
+        <div class="${miniStageClass}">
+          <div id="miniPhysicsDiceBox" class="mini-physics-dice-box" aria-hidden="true"></div>
+          <button class="die-visual ${state.rolling ? 'rolling' : ''}" type="button" data-view="dice" aria-label="Открыть кубики">
+            <span>${escapeHtml(diceSidesLabel(miniNotation))}</span>
+            <strong>${result}</strong>
+          </button>
+        </div>
         <div class="dice-row">
           ${[4, 6, 8, 10, 12, 20].map((side) => `<button type="button" data-roll="1d${side}">d${side}</button>`).join('')}
         </div>
@@ -1593,9 +1695,13 @@ function render() {
 
   if (state.view === 'dice') {
     requestAnimationFrame(() => {
-      void ensureDiceBox()
+      void ensureDiceBox('main')
     })
   }
+
+  requestAnimationFrame(() => {
+    void ensureDiceBox('mini')
+  })
 }
 
 function kindGlyph(kind: string) {
@@ -1800,7 +1906,7 @@ document.addEventListener('click', (event) => {
   }
 
   if (roll) {
-    addRoll(roll.dataset.roll || state.diceNotation)
+    addRoll(roll.dataset.roll || state.diceNotation, roll.closest('.dice-mini') ? 'mini' : 'main')
     return
   }
 
