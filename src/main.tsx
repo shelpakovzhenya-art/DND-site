@@ -59,6 +59,7 @@ type AppState = {
   rolling: boolean
   rollingDisplay: number
   rollingNotation: string
+  rollVariant: number
   generatedProblem: string
   focusSearch: boolean
   toast: string
@@ -166,12 +167,12 @@ const state: AppState = {
   rolling: false,
   rollingDisplay: 19,
   rollingNotation: '1d20',
+  rollVariant: 1,
   generatedProblem: '',
   focusSearch: false,
   toast: '',
 }
 
-let rollInterval: number | null = null
 let rollTimeout: number | null = null
 
 function readStorage<T>(key: string, fallback: T): T {
@@ -315,7 +316,7 @@ function rollNotation(notation: string): RollResult | null {
   const sides = Number(match[2])
   const modifier = Number(match[3] || 0)
 
-  if (!Number.isFinite(count) || !Number.isFinite(sides) || count < 1 || sides < 2 || sides > 1000) {
+  if (!Number.isFinite(count) || !Number.isFinite(sides) || !Number.isFinite(modifier) || count < 1 || sides < 2 || sides > 1000) {
     return null
   }
 
@@ -350,41 +351,29 @@ function addRoll(notation: string) {
     return
   }
 
-  const fakeTotal = () => Array.from({ length: count }, () => randomInt(sides)).reduce((sum, item) => sum + item, 0) + modifier
-
-  if (rollInterval) window.clearInterval(rollInterval)
   if (rollTimeout) window.clearTimeout(rollTimeout)
+
+  const result = rollNotation(normalized)
+  if (!result) {
+    setToast('Формула кубика не распознана')
+    return
+  }
 
   state.diceNotation = normalized
   state.rolling = true
   state.rollingNotation = normalized
-  state.rollingDisplay = fakeTotal()
+  state.rollingDisplay = result.total
+  state.rollVariant = randomInt(4)
   render()
 
-  rollInterval = window.setInterval(() => {
-    state.rollingDisplay = fakeTotal()
-    render()
-  }, 72)
-
   rollTimeout = window.setTimeout(() => {
-    if (rollInterval) window.clearInterval(rollInterval)
-    rollInterval = null
     rollTimeout = null
-
-    const result = rollNotation(normalized)
-    if (!result) {
-      state.rolling = false
-      setToast('Формула кубика не распознана')
-      render()
-      return
-    }
-
     state.rolling = false
     state.rollingDisplay = result.total
     state.rolls = [result, ...state.rolls].slice(0, 14)
     writeStorage(STORAGE.rolls, state.rolls)
     render()
-  }, 1350)
+  }, 1720)
 }
 
 function generateProblem() {
@@ -404,6 +393,11 @@ function pickRandom(kind: string) {
 
 function shortMeta(item: ArchiveRecord) {
   return item.meta.filter(Boolean).slice(0, 2).join(' · ')
+}
+
+function diceSidesLabel(notation: string) {
+  const match = notation.match(/d(\d+)/i)
+  return match ? `d${match[1]}` : notation
 }
 
 function renderLogo() {
@@ -764,6 +758,12 @@ function renderDiceView() {
   const last = state.rolls[0]
   const displayTotal = state.rolling ? state.rollingDisplay : last ? last.total : 19
   const displayNotation = state.rolling ? state.rollingNotation : last ? last.notation : state.diceNotation
+  const trayClass = `dice-tray${state.rolling ? ` rolling throw-${state.rollVariant}` : ''}`
+  const rollDetails = state.rolling
+    ? 'Кубик летит, кувыркается и раскрывает результат на приземлении'
+    : last
+      ? `Броски: ${last.rolls.join(', ')}${last.modifier ? `; модификатор ${last.modifier}` : ''}`
+      : 'Готов к броску'
 
   return `
     ${renderTabs()}
@@ -773,10 +773,22 @@ function renderDiceView() {
           <span>Кубики</span>
           <b>${displayNotation}</b>
         </div>
-        <div class="giant-die ${state.rolling ? 'rolling' : ''}" aria-live="polite">
-          <span>${displayNotation}</span>
-          <strong>${displayTotal}</strong>
-          <small>${state.rolling ? 'Кубики летят...' : last ? `Броски: ${last.rolls.join(', ')}${last.modifier ? `; модификатор ${last.modifier}` : ''}` : 'Готов к броску'}</small>
+        <div class="${trayClass}" aria-live="polite">
+          <span class="tray-grid" aria-hidden="true"></span>
+          <span class="tray-impact one" aria-hidden="true"></span>
+          <span class="tray-impact two" aria-hidden="true"></span>
+          <span class="die-shadow" aria-hidden="true"></span>
+          <span class="thrown-die" data-sides="${escapeAttr(diceSidesLabel(displayNotation))}" aria-hidden="true">
+            <i class="die-facet die-facet-a"></i>
+            <i class="die-facet die-facet-b"></i>
+            <i class="die-facet die-facet-c"></i>
+            <strong>${displayTotal}</strong>
+          </span>
+          <div class="roll-readout">
+            <span>${displayNotation}</span>
+            <strong>${displayTotal}</strong>
+            <small>${rollDetails}</small>
+          </div>
         </div>
         <form class="notation-form" id="diceForm">
           <input name="notation" value="${escapeAttr(state.diceNotation)}" placeholder="2d6+3" />
