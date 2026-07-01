@@ -7,3 +7,4 @@ dist-ssr
 *.local
 .vite-dev.*.log
 .vite-aisol.*.log
+.vite-dnd-site.*.log

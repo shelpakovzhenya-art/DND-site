@@ -648,15 +648,26 @@ label > span {
   position: absolute;
   inset: 0;
   content: "";
-  background:
-    linear-gradient(180deg, rgba(2, 8, 18, 0.1), rgba(2, 8, 18, 0.88)),
-    var(--art);
-  background-size: cover;
+  background-image:
+    linear-gradient(90deg, rgba(2, 8, 18, 0.9) 0%, rgba(2, 8, 18, 0.46) 48%, rgba(2, 8, 18, 0.66) 100%),
+    linear-gradient(180deg, rgba(2, 8, 18, 0.08), rgba(2, 8, 18, 0.7)),
+    url("/images/card-atlas.png");
+  background-position: center, center, var(--card-position, 0% 0%);
+  background-size: 100% 100%, 100% 100%, 400% 200%;
   transition: transform 0.2s ease;
 }
 
 .archive-card:hover::before {
   transform: scale(1.04);
+}
+
+.archive-card::after {
+  position: absolute;
+  inset: auto 12px 12px 12px;
+  height: 1px;
+  content: "";
+  background: linear-gradient(90deg, transparent, rgba(32, 214, 255, 0.56), transparent);
+  opacity: 0.56;
 }
 
 .archive-card strong,
@@ -695,54 +706,35 @@ label > span {
 }
 
 .archive-card[data-art="character"] {
-  --art:
-    radial-gradient(circle at 62% 34%, rgba(151, 209, 255, 0.44), transparent 18%),
-    linear-gradient(126deg, #14364d, #081425 44%, #0e2032);
+  --card-position: 0% 0%;
 }
 
 .archive-card[data-art="class"] {
-  --art:
-    conic-gradient(from 45deg at 58% 48%, transparent 0 16%, rgba(246, 168, 59, 0.68) 17% 20%, transparent 21% 38%, rgba(246, 168, 59, 0.34) 39% 41%, transparent 42%),
-    linear-gradient(135deg, #31200f, #07111f 58%, #231606);
+  --card-position: 33.333% 0%;
 }
 
 .archive-card[data-art="feat"] {
-  --art:
-    conic-gradient(from 0deg at 56% 48%, rgba(40, 230, 200, 0.04), rgba(40, 230, 200, 0.42), rgba(40, 230, 200, 0.04)),
-    linear-gradient(135deg, #082b32, #051220 62%, #08211e);
+  --card-position: 66.666% 0%;
 }
 
 .archive-card[data-art="spell"] {
-  --art:
-    radial-gradient(circle at 65% 48%, rgba(155, 108, 255, 0.68), transparent 28%),
-    repeating-radial-gradient(circle at 66% 49%, rgba(238, 228, 255, 0.28) 0 1px, transparent 2px 20px),
-    linear-gradient(135deg, #271553, #07111f 66%, #150a35);
+  --card-position: 100% 0%;
 }
 
 .archive-card[data-art="item"] {
-  --art:
-    linear-gradient(145deg, transparent 0 40%, rgba(246, 168, 59, 0.52) 41% 44%, transparent 45%),
-    radial-gradient(circle at 70% 64%, rgba(246, 168, 59, 0.34), transparent 24%),
-    linear-gradient(135deg, #24160c, #07111f 60%, #21170d);
+  --card-position: 0% 100%;
 }
 
 .archive-card[data-art="race"] {
-  --art:
-    radial-gradient(circle at 58% 42%, rgba(40, 230, 200, 0.5), transparent 18%),
-    linear-gradient(135deg, #0d3634, #061220 62%, #112b24);
+  --card-position: 33.333% 100%;
 }
 
 .archive-card[data-art="creature"] {
-  --art:
-    linear-gradient(110deg, transparent 0 48%, rgba(120, 193, 216, 0.42) 49% 50%, transparent 51%),
-    radial-gradient(circle at 62% 54%, rgba(32, 214, 255, 0.22), transparent 34%),
-    linear-gradient(135deg, #102a37, #07111f 60%, #071a24);
+  --card-position: 66.666% 100%;
 }
 
 .archive-card[data-art="generator"] {
-  --art:
-    conic-gradient(from 30deg at 58% 50%, rgba(32, 214, 255, 0.1), rgba(32, 214, 255, 0.44), rgba(155, 108, 255, 0.36), rgba(32, 214, 255, 0.1)),
-    linear-gradient(135deg, #071a33, #07111f 62%, #0b1730);
+  --card-position: 100% 100%;
 }
 
 .list-panels {
@@ -946,6 +938,78 @@ label > span {
   text-align: left;
 }
 
+.quick-actions button,
+.quick-grid button,
+.mini-list button,
+.character-card {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  background-image:
+    linear-gradient(90deg, rgba(3, 11, 21, 0.88), rgba(3, 11, 21, 0.54)),
+    url("/images/card-atlas.png");
+  background-position: center, var(--small-card-position, 100% 100%);
+  background-size: 100% 100%, 400% 200%;
+}
+
+.quick-actions button::before,
+.quick-grid button::before,
+.mini-list button::before,
+.character-card::before {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  content: "";
+  background:
+    linear-gradient(90deg, var(--small-card-accent, rgba(32, 214, 255, 0.62)), transparent 4px),
+    radial-gradient(circle at 86% 50%, rgba(255, 255, 255, 0.12), transparent 34%);
+  opacity: 0.82;
+}
+
+.quick-actions button:nth-child(1),
+.quick-grid button:nth-child(1) {
+  --small-card-position: 100% 100%;
+  --small-card-accent: rgba(32, 214, 255, 0.72);
+}
+
+.quick-actions button:nth-child(2),
+.quick-grid button:nth-child(2) {
+  --small-card-position: 100% 0%;
+  --small-card-accent: rgba(155, 108, 255, 0.72);
+}
+
+.quick-actions button:nth-child(3),
+.quick-grid button:nth-child(3) {
+  --small-card-position: 0% 0%;
+  --small-card-accent: rgba(40, 230, 200, 0.72);
+}
+
+.quick-actions button:nth-child(4),
+.quick-grid button:nth-child(4) {
+  --small-card-position: 66.666% 100%;
+  --small-card-accent: rgba(32, 214, 255, 0.72);
+}
+
+.mini-list button:nth-child(1) {
+  --small-card-position: 0% 0%;
+  --small-card-accent: rgba(40, 230, 200, 0.72);
+}
+
+.mini-list button:nth-child(2) {
+  --small-card-position: 33.333% 0%;
+  --small-card-accent: rgba(246, 168, 59, 0.72);
+}
+
+.mini-list button:nth-child(3) {
+  --small-card-position: 100% 0%;
+  --small-card-accent: rgba(155, 108, 255, 0.72);
+}
+
+.mini-list button:nth-child(4) {
+  --small-card-position: 66.666% 100%;
+  --small-card-accent: rgba(32, 214, 255, 0.72);
+}
+
 .mini-list {
   display: grid;
   gap: 6px;
@@ -1000,12 +1064,55 @@ label > span {
   position: relative;
   display: grid;
   place-items: center;
+  overflow: hidden;
   border: 1px solid rgba(32, 214, 255, 0.28);
   background:
     linear-gradient(145deg, transparent 0 38%, rgba(32, 214, 255, 0.4) 39% 40%, transparent 41%),
     radial-gradient(circle at 50% 45%, rgba(32, 214, 255, 0.26), transparent 44%),
     rgba(4, 18, 32, 0.7);
   clip-path: polygon(50% 0, 87% 16%, 100% 50%, 87% 84%, 50% 100%, 13% 84%, 0 50%, 13% 16%);
+  transform-style: preserve-3d;
+}
+
+.die-visual::before,
+.giant-die::before {
+  position: absolute;
+  inset: 12%;
+  border: 1px solid rgba(32, 214, 255, 0.22);
+  content: "";
+  clip-path: inherit;
+}
+
+.die-visual::after,
+.giant-die::after {
+  position: absolute;
+  top: 50%;
+  left: -48%;
+  width: 196%;
+  height: 7px;
+  content: "";
+  background: linear-gradient(90deg, transparent, rgba(32, 214, 255, 0.92), rgba(155, 108, 255, 0.86), transparent);
+  opacity: 0;
+  transform: rotate(-32deg);
+}
+
+.die-visual.rolling,
+.giant-die.rolling {
+  animation: diceThrow 1.35s cubic-bezier(0.2, 0.9, 0.2, 1);
+  border-color: rgba(32, 214, 255, 0.82);
+  box-shadow:
+    0 0 34px rgba(32, 214, 255, 0.28),
+    inset 0 0 36px rgba(155, 108, 255, 0.22);
+}
+
+.die-visual.rolling::after,
+.giant-die.rolling::after {
+  animation: diceSweep 1.35s ease-out;
+}
+
+.die-visual.rolling strong,
+.giant-die.rolling strong {
+  animation: diceNumberFlicker 0.18s steps(2, end) infinite;
 }
 
 .die-visual {
@@ -1052,6 +1159,8 @@ label > span {
   min-height: 78px;
   padding: 10px;
   text-align: left;
+  --small-card-position: 0% 0%;
+  --small-card-accent: rgba(32, 214, 255, 0.72);
 }
 
 .character-card strong,
@@ -1169,6 +1278,52 @@ label > span {
   color: var(--muted);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+@keyframes diceThrow {
+  0% {
+    transform: translate3d(-18px, 12px, 0) rotate(-18deg) scale(0.88);
+    filter: blur(0.5px) brightness(1.1);
+  }
+  24% {
+    transform: translate3d(22px, -28px, 0) rotate(72deg) scale(1.06);
+    filter: blur(1.5px) brightness(1.35);
+  }
+  52% {
+    transform: translate3d(-10px, 10px, 0) rotate(164deg) scale(0.98);
+  }
+  74% {
+    transform: translate3d(7px, -5px, 0) rotate(238deg) scale(1.02);
+  }
+  100% {
+    transform: translate3d(0, 0, 0) rotate(360deg) scale(1);
+    filter: blur(0) brightness(1);
+  }
+}
+
+@keyframes diceSweep {
+  0% {
+    opacity: 0;
+    transform: translateX(-34%) rotate(-32deg);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(34%) rotate(-32deg);
+  }
+}
+
+@keyframes diceNumberFlicker {
+  0% {
+    transform: scale(0.96);
+    opacity: 0.78;
+  }
+  100% {
+    transform: scale(1.04);
+    opacity: 1;
+  }
 }
 
 .toast {

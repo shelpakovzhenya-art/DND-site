@@ -56,6 +56,9 @@ type AppState = {
   rolls: RollResult[]
   notes: string
   diceNotation: string
+  rolling: boolean
+  rollingDisplay: number
+  rollingNotation: string
   generatedProblem: string
   focusSearch: boolean
   toast: string
@@ -160,10 +163,16 @@ const state: AppState = {
   rolls: [],
   notes: '',
   diceNotation: '1d20',
+  rolling: false,
+  rollingDisplay: 19,
+  rollingNotation: '1d20',
   generatedProblem: '',
   focusSearch: false,
   toast: '',
 }
+
+let rollInterval: number | null = null
+let rollTimeout: number | null = null
 
 function readStorage<T>(key: string, fallback: T): T {
   try {
@@ -324,16 +333,58 @@ function rollNotation(notation: string): RollResult | null {
 }
 
 function addRoll(notation: string) {
-  const result = rollNotation(notation)
-  if (!result) {
+  const normalized = notation.replace(/\s+/g, '').toLowerCase()
+  const match = normalized.match(/^(\d*)d(\d+)([+-]\d+)?$/)
+
+  if (!match) {
     setToast('Формула кубика не распознана')
     return
   }
 
-  state.diceNotation = result.notation
-  state.rolls = [result, ...state.rolls].slice(0, 14)
-  writeStorage(STORAGE.rolls, state.rolls)
+  const count = Math.min(Number(match[1] || 1), 100)
+  const sides = Number(match[2])
+  const modifier = Number(match[3] || 0)
+
+  if (!Number.isFinite(count) || !Number.isFinite(sides) || count < 1 || sides < 2 || sides > 1000) {
+    setToast('Формула кубика не распознана')
+    return
+  }
+
+  const fakeTotal = () => Array.from({ length: count }, () => randomInt(sides)).reduce((sum, item) => sum + item, 0) + modifier
+
+  if (rollInterval) window.clearInterval(rollInterval)
+  if (rollTimeout) window.clearTimeout(rollTimeout)
+
+  state.diceNotation = normalized
+  state.rolling = true
+  state.rollingNotation = normalized
+  state.rollingDisplay = fakeTotal()
   render()
+
+  rollInterval = window.setInterval(() => {
+    state.rollingDisplay = fakeTotal()
+    render()
+  }, 72)
+
+  rollTimeout = window.setTimeout(() => {
+    if (rollInterval) window.clearInterval(rollInterval)
+    rollInterval = null
+    rollTimeout = null
+
+    const result = rollNotation(normalized)
+    if (!result) {
+      state.rolling = false
+      setToast('Формула кубика не распознана')
+      render()
+      return
+    }
+
+    state.rolling = false
+    state.rollingDisplay = result.total
+    state.rolls = [result, ...state.rolls].slice(0, 14)
+    writeStorage(STORAGE.rolls, state.rolls)
+    render()
+  }, 1350)
 }
 
 function generateProblem() {
@@ -404,7 +455,7 @@ function renderSidebar() {
   ] as const
 
   const lastRoll = state.rolls[0]
-  const result = lastRoll?.total ?? 19
+  const result = state.rolling ? state.rollingDisplay : lastRoll?.total ?? 19
 
   return `
     <aside class="left-rail">
@@ -430,7 +481,7 @@ function renderSidebar() {
           <span>Бросок кубиков</span>
           <button type="button" data-roll="${state.diceNotation}" title="Повторить">↻</button>
         </div>
-        <button class="die-visual" type="button" data-view="dice" aria-label="Открыть кубики">
+        <button class="die-visual ${state.rolling ? 'rolling' : ''}" type="button" data-view="dice" aria-label="Открыть кубики">
           <span>d20</span>
           <strong>${result}</strong>
         </button>
@@ -711,6 +762,8 @@ function renderCharactersView() {
 
 function renderDiceView() {
   const last = state.rolls[0]
+  const displayTotal = state.rolling ? state.rollingDisplay : last ? last.total : 19
+  const displayNotation = state.rolling ? state.rollingNotation : last ? last.notation : state.diceNotation
 
   return `
     ${renderTabs()}
@@ -718,12 +771,12 @@ function renderDiceView() {
       <div class="dice-stage panel-cut">
         <div class="section-heading">
           <span>Кубики</span>
-          <b>${last ? last.notation : state.diceNotation}</b>
+          <b>${displayNotation}</b>
         </div>
-        <div class="giant-die" aria-live="polite">
-          <span>${last ? last.notation : 'd20'}</span>
-          <strong>${last ? last.total : 19}</strong>
-          <small>${last ? `Броски: ${last.rolls.join(', ')}${last.modifier ? `; модификатор ${last.modifier}` : ''}` : 'Готов к броску'}</small>
+        <div class="giant-die ${state.rolling ? 'rolling' : ''}" aria-live="polite">
+          <span>${displayNotation}</span>
+          <strong>${displayTotal}</strong>
+          <small>${state.rolling ? 'Кубики летят...' : last ? `Броски: ${last.rolls.join(', ')}${last.modifier ? `; модификатор ${last.modifier}` : ''}` : 'Готов к броску'}</small>
         </div>
         <form class="notation-form" id="diceForm">
           <input name="notation" value="${escapeAttr(state.diceNotation)}" placeholder="2d6+3" />
