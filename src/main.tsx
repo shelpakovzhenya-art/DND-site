@@ -1,6 +1,8 @@
+import type DiceBoxType from '@3d-dice/dice-box-threejs'
 import './index.css'
 
 type Accent = 'violet' | 'cyan' | 'gold' | 'teal' | 'red'
+type DetailValue = string | number | boolean | null | DetailValue[] | { [key: string]: DetailValue }
 
 type ArchiveRecord = {
   id: string
@@ -12,6 +14,8 @@ type ArchiveRecord = {
   meta: string[]
   sourceUrl: string
   accent: Accent
+  full?: Record<string, DetailValue> | null
+  fullText?: string
 }
 
 type SeedPayload = {
@@ -83,12 +87,12 @@ const STORAGE = {
 
 const FILTERS: Record<string, string[]> = {
   all: [],
-  rules: ['Класс', 'Народ', 'Навык', 'Черта'],
+  rules: ['Класс', 'Народ', 'Навык', 'Черта', 'Трейт', 'Домен', 'Поддомен', 'Инквизиция', 'Архетип'],
   classes: ['Класс'],
   spells: ['Заклинание'],
-  items: ['Волшебный предмет'],
+  items: ['Волшебный предмет', 'Оружие', 'Броня', 'Снаряжение'],
   creatures: ['Существо'],
-  generators: ['Существо', 'Заклинание', 'Волшебный предмет'],
+  generators: ['Существо', 'Заклинание', 'Волшебный предмет', 'Оружие', 'Броня', 'Снаряжение'],
 }
 
 const FILTER_LABELS: Record<string, string> = {
@@ -108,7 +112,15 @@ const KIND_ACCENTS: Record<string, Accent> = {
   Черта: 'violet',
   Заклинание: 'violet',
   'Волшебный предмет': 'gold',
+  Оружие: 'gold',
+  Броня: 'gold',
+  Снаряжение: 'teal',
   Существо: 'cyan',
+  Трейт: 'teal',
+  Домен: 'violet',
+  Поддомен: 'violet',
+  Инквизиция: 'violet',
+  Архетип: 'cyan',
   Персонаж: 'teal',
   Заметка: 'red',
 }
@@ -174,6 +186,12 @@ const state: AppState = {
 }
 
 let rollTimeout: number | null = null
+type DiceBoxInstance = InstanceType<typeof DiceBoxType>
+
+let diceBox: DiceBoxInstance | null = null
+let diceBoxElement: HTMLElement | null = null
+let diceBoxReady: Promise<DiceBoxInstance | null> | null = null
+let diceRollToken = 0
 
 function readStorage<T>(key: string, fallback: T): T {
   try {
@@ -199,6 +217,30 @@ function escapeHtml(value: unknown) {
 
 function escapeAttr(value: unknown) {
   return escapeHtml(value).replace(/\n/g, '&#10;')
+}
+
+function plainText(value: unknown) {
+  return String(value ?? '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/[ \t\r\f\v]+/g, ' ')
+    .replace(/\n\s+/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function compactText(value: unknown, max = 1400) {
+  const text = plainText(value)
+  return text.length > max ? `${text.slice(0, max - 1).trim()}...` : text
 }
 
 function uid(prefix: string) {
@@ -241,7 +283,7 @@ function recordMatchesSearch(item: ArchiveRecord) {
   const query = normalizeQuery(state.query)
   if (!query) return true
 
-  const haystack = [item.title, item.kind, item.subtitle, item.details, ...item.meta]
+  const haystack = [item.title, item.kind, item.subtitle, item.details, item.fullText, ...item.meta]
     .join(' ')
     .toLocaleLowerCase('ru')
 
@@ -271,7 +313,48 @@ function setSelected(id: string) {
 }
 
 function saveRecords() {
-  writeStorage(STORAGE.records, state.records)
+  const seedById = new Map((state.seed?.records || []).map((item) => [item.id, item]))
+  const edited = state.records
+    .filter((item) => {
+      const seed = seedById.get(item.id)
+      return (
+        !seed ||
+        item.kind !== seed.kind ||
+        item.title !== seed.title ||
+        item.subtitle !== seed.subtitle ||
+        item.details !== seed.details ||
+        item.sourceUrl !== seed.sourceUrl ||
+        item.accent !== seed.accent ||
+        item.meta.join('\u0001') !== seed.meta.join('\u0001')
+      )
+    })
+    .map((item) => ({
+      id: item.id,
+      kind: item.kind,
+      alias: item.alias,
+      title: item.title,
+      subtitle: item.subtitle,
+      details: item.details,
+      meta: item.meta,
+      sourceUrl: item.sourceUrl,
+      accent: item.accent,
+      full: item.full || null,
+      fullText: item.fullText || '',
+    }))
+
+  writeStorage(STORAGE.records, edited)
+}
+
+function mergeRecordEdits(seedRecords: ArchiveRecord[], edits: ArchiveRecord[] | null) {
+  if (!edits?.length) return seedRecords
+
+  const merged = new Map(seedRecords.map((item) => [item.id, item]))
+  edits.forEach((edit) => {
+    const seed = merged.get(edit.id)
+    merged.set(edit.id, seed ? { ...seed, ...edit, full: edit.full || seed.full, fullText: edit.fullText || seed.fullText } : edit)
+  })
+
+  return Array.from(merged.values())
 }
 
 function saveCharacters() {
@@ -333,7 +416,111 @@ function rollNotation(notation: string): RollResult | null {
   }
 }
 
-function addRoll(notation: string) {
+function physicsNotation(notation: string, result: RollResult) {
+  const match = notation.match(/^(\d*)d(\d+)([+-]\d+)?$/)
+  if (!match) return null
+
+  const count = Math.min(Number(match[1] || 1), 100)
+  const sides = Number(match[2])
+  const modifier = Number(match[3] || 0)
+  const supported = new Set([2, 4, 6, 8, 10, 12, 20, 100])
+
+  if (!supported.has(sides) || count > 24) return null
+
+  const mod = modifier ? `${modifier > 0 ? '+' : ''}${modifier}` : ''
+  return `${count}d${sides}${mod}@${result.rolls.join(',')}`
+}
+
+async function ensureDiceBox() {
+  const element = document.querySelector<HTMLElement>('#physicsDiceBox')
+  if (!element) return null
+  if (diceBox && diceBoxElement === element) return diceBox
+  if (diceBoxReady && diceBoxElement === element) return diceBoxReady
+
+  element.innerHTML = ''
+  diceBoxElement = element
+
+  diceBoxReady = import('@3d-dice/dice-box-threejs')
+    .then(({ default: DiceBox }) => {
+      diceBox = new DiceBox('#physicsDiceBox', {
+        assetPath: '/assets/dice-box-threejs/',
+        sounds: true,
+        volume: 44,
+        shadows: true,
+        theme_surface: 'green-felt',
+        theme_colorset: 'white',
+        theme_material: 'glass',
+        gravity_multiplier: 430,
+        light_intensity: 0.92,
+        baseScale: 82,
+        strength: 1.65,
+      })
+
+      return diceBox.init ? diceBox.init() : diceBox.initialize()
+    })
+    .then(() => {
+      element.classList.add('ready')
+      element.closest('.dice-tray')?.classList.add('physics-ready')
+      return diceBox
+    })
+    .catch((error) => {
+      element.classList.add('failed')
+      element.closest('.dice-tray')?.classList.add('physics-failed')
+      console.warn('Dice engine failed', error)
+      return null
+    })
+
+  return diceBoxReady
+}
+
+function renderRollHistoryRow(roll: RollResult) {
+  return `
+    <div>
+      <strong>${roll.total}</strong>
+      <span>${escapeHtml(roll.notation)} · ${escapeHtml(roll.createdAt)}</span>
+    </div>
+  `
+}
+
+function patchDiceDomAfterRoll(result: RollResult) {
+  if (state.view !== 'dice') return false
+
+  const tray = document.querySelector('.dice-tray')
+  const readout = document.querySelector('.roll-readout')
+  const history = document.querySelector('.roll-history')
+  const historyCount = document.querySelector('.history-panel .section-heading b')
+  const sectionNotation = document.querySelector('.dice-stage .section-heading b')
+  const miniDie = document.querySelector('.die-visual')
+  const miniTotal = document.querySelector('.die-visual strong')
+
+  if (!tray || !readout || !history || !historyCount) return false
+
+  tray.classList.remove('rolling', 'throw-1', 'throw-2', 'throw-3', 'throw-4')
+  readout.innerHTML = `
+    <span>${escapeHtml(result.notation)}</span>
+    <strong>${result.total}</strong>
+    <small>Броски: ${result.rolls.join(', ')}${result.modifier ? `; модификатор ${result.modifier}` : ''}</small>
+  `
+  history.insertAdjacentHTML('afterbegin', renderRollHistoryRow(result))
+  historyCount.textContent = String(state.rolls.length)
+  if (sectionNotation) sectionNotation.textContent = result.notation
+  if (miniTotal) miniTotal.textContent = String(result.total)
+  miniDie?.classList.remove('rolling')
+
+  return true
+}
+
+function completeRoll(result: RollResult, token: number, preserveDice = false) {
+  if (token !== diceRollToken) return
+  rollTimeout = null
+  state.rolling = false
+  state.rollingDisplay = result.total
+  state.rolls = [result, ...state.rolls].slice(0, 14)
+  writeStorage(STORAGE.rolls, state.rolls)
+  if (!preserveDice || !patchDiceDomAfterRoll(result)) render()
+}
+
+async function addRoll(notation: string) {
   const normalized = notation.replace(/\s+/g, '').toLowerCase()
   const match = normalized.match(/^(\d*)d(\d+)([+-]\d+)?$/)
 
@@ -346,7 +533,7 @@ function addRoll(notation: string) {
   const sides = Number(match[2])
   const modifier = Number(match[3] || 0)
 
-  if (!Number.isFinite(count) || !Number.isFinite(sides) || count < 1 || sides < 2 || sides > 1000) {
+  if (!Number.isFinite(count) || !Number.isFinite(sides) || !Number.isFinite(modifier) || count < 1 || sides < 2 || sides > 1000) {
     setToast('Формула кубика не распознана')
     return
   }
@@ -364,15 +551,23 @@ function addRoll(notation: string) {
   state.rollingNotation = normalized
   state.rollingDisplay = result.total
   state.rollVariant = randomInt(4)
+  const token = ++diceRollToken
   render()
 
+  const engineNotation = physicsNotation(normalized, result)
+  const engine = engineNotation ? await ensureDiceBox() : null
+  if (engine && token === diceRollToken) {
+    try {
+      await engine.roll(engineNotation)
+      completeRoll(result, token, true)
+      return
+    } catch (error) {
+      console.warn('Physics dice roll failed, using fallback', error)
+    }
+  }
+
   rollTimeout = window.setTimeout(() => {
-    rollTimeout = null
-    state.rolling = false
-    state.rollingDisplay = result.total
-    state.rolls = [result, ...state.rolls].slice(0, 14)
-    writeStorage(STORAGE.rolls, state.rolls)
-    render()
+    completeRoll(result, token)
   }, 1720)
 }
 
@@ -544,7 +739,13 @@ function renderArchiveCards() {
     { title: 'Классы', value: `${counts['Класс'] || 0} класса`, accent: 'gold', filter: 'classes', art: 'class' },
     { title: 'Черты', value: `${counts['Черта'] || 0} черт`, accent: 'teal', filter: 'rules', art: 'feat' },
     { title: 'Заклинания', value: `${counts['Заклинание'] || 0} заклинаний`, accent: 'violet', filter: 'spells', art: 'spell' },
-    { title: 'Снаряжение', value: `${counts['Волшебный предмет'] || 0} предмет`, accent: 'gold', filter: 'items', art: 'item' },
+    {
+      title: 'Снаряжение',
+      value: `${(counts['Волшебный предмет'] || 0) + (counts['Оружие'] || 0) + (counts['Броня'] || 0) + (counts['Снаряжение'] || 0)} предмет`,
+      accent: 'gold',
+      filter: 'items',
+      art: 'item',
+    },
     { title: 'Народы', value: `${counts['Народ'] || 0} народов`, accent: 'teal', filter: 'rules', art: 'race' },
     { title: 'Существа', value: `${counts['Существо'] || 0} существ`, accent: 'cyan', filter: 'creatures', art: 'creature' },
     { title: 'Генераторы', value: `${state.rolls.length || 12} инструментов`, accent: 'violet', action: 'dice', art: 'generator' },
@@ -648,7 +849,7 @@ function renderRecordEditor(item: ArchiveRecord) {
       <label>
         <span>Категория</span>
         <select name="kind">
-          ${['Класс', 'Народ', 'Навык', 'Черта', 'Заклинание', 'Волшебный предмет', 'Существо', 'Домашнее правило']
+          ${['Класс', 'Народ', 'Навык', 'Черта', 'Трейт', 'Заклинание', 'Волшебный предмет', 'Оружие', 'Броня', 'Снаряжение', 'Существо', 'Домен', 'Поддомен', 'Инквизиция', 'Архетип', 'Домашнее правило']
             .map((kind) => `<option value="${kind}" ${item.kind === kind ? 'selected' : ''}>${kind}</option>`)
             .join('')}
         </select>
@@ -674,7 +875,421 @@ function renderRecordEditor(item: ArchiveRecord) {
         <button class="ghost-button" type="button" data-favorite="${escapeAttr(item.id)}">${state.favourites.includes(item.id) ? 'Убрать из избранного' : 'В избранное'}</button>
       </div>
       <p class="source-line">Источник: ${escapeHtml(item.sourceUrl || 'локальная запись')}</p>
+      ${renderFullInfo(item)}
     </form>
+  `
+}
+
+const DETAIL_LABELS: Record<string, string> = {
+  engName: 'Оригинальное название',
+  description: 'Описание',
+  fullDescription: 'Полное описание',
+  role: 'Роль',
+  alignment: 'Мировоззрение',
+  hitDie: 'Кость здоровья',
+  startingWealth: 'Начальное богатство',
+  skillRanksPerLevel: 'Навыки за уровень',
+  tableFeatures: 'Таблица способностей',
+  tableSpellCount: 'Таблица заклинаний',
+  features: 'Способности',
+  skills: 'Навыки',
+  baseRaceTraits: 'Базовые особенности народа',
+  alterRaceTraits: 'Альтернативные особенности',
+  favoredClass: 'Избранный класс',
+  adventurerClass: 'Классы авантюристов',
+  physicalDescription: 'Внешность',
+  society: 'Общество',
+  relations: 'Отношения',
+  alignmentAndReligion: 'Мировоззрение и религия',
+  adventurers: 'Авантюристы',
+  namesDescription: 'Имена',
+  castingTime: 'Время сотворения',
+  components: 'Компоненты',
+  range: 'Дистанция',
+  target: 'Цель',
+  area: 'Область',
+  effect: 'Эффект',
+  duration: 'Длительность',
+  savingThrow: 'Испытание',
+  spellResistance: 'Устойчивость к магии',
+  subSchool: 'Подшкола',
+  school: 'Школа',
+  schools: 'Школы',
+  classes: 'Классы',
+  races: 'Народы',
+  requirements: 'Требования',
+  prerequisites: 'Предпосылки',
+  benefit: 'Преимущество',
+  normal: 'Обычно',
+  special: 'Особое',
+  types: 'Типы',
+  aura: 'Аура',
+  cl: 'Уровень заклинателя',
+  price: 'Цена',
+  weight: 'Вес',
+  constructionRequirements: 'Требования создания',
+  constructionCost: 'Стоимость создания',
+  statistics: 'Параметры',
+  destruction: 'Уничтожение',
+  cr: 'КР',
+  exp: 'Опыт',
+  fullCreatureType: 'Тип существа',
+  initiative: 'Инициатива',
+  senses: 'Чувства',
+  perception: 'Внимание',
+  acDescription: 'КБ',
+  hitPoints: 'HP',
+  hitPointsDescription: 'Кость HP',
+  fortitude: 'Стойкость',
+  reflex: 'Реакция',
+  will: 'Воля',
+  defensiveAbilities: 'Защитные способности',
+  immune: 'Иммунитет',
+  resist: 'Сопротивления',
+  weaknesses: 'Слабости',
+  speed: 'Скорость',
+  meleeAttacks: 'Ближний бой',
+  rangedAttacks: 'Дальний бой',
+  specialAttacks: 'Особые атаки',
+  spellLikeAbilities: 'Псевдозаклинания',
+  spellsPrepared: 'Подготовленные заклинания',
+  spellsKnown: 'Известные заклинания',
+  strength: 'СИЛ',
+  dexterity: 'ЛВК',
+  constitution: 'ТЕЛ',
+  intelligence: 'ИНТ',
+  wisdom: 'МДР',
+  charisma: 'ХАР',
+  baseAttack: 'БМА',
+  cmb: 'БМ',
+  cmd: 'ЗМ',
+  feats: 'Черты',
+  languages: 'Языки',
+  environment: 'Среда',
+  organization: 'Организация',
+  treasure: 'Сокровища',
+  specialAbilities: 'Особые способности',
+  cost: 'Цена',
+  damageS: 'Урон S',
+  damageM: 'Урон M',
+  criticalRoll: 'Критический диапазон',
+  criticalDamage: 'Критический множитель',
+  misfire: 'Осечка',
+  capacity: 'Емкость',
+  proficientCategory: 'Категория владения',
+  rangeCategory: 'Дистанция оружия',
+  encumbranceCategory: 'Габарит',
+  armorBonus: 'Бонус брони',
+  maxDexBonus: 'Макс. ЛВК',
+  armorCheckPenalty: 'Штраф за доспех',
+  arcaneSpellFailureChance: 'Провал мистического заклинания',
+  speed30: 'Скорость 30',
+  speed20: 'Скорость 20',
+  equipmentSubType: 'Подтип снаряжения',
+  craftDc: 'СЛ изготовления',
+  power0Name: 'Сила 0',
+  power0Description: 'Описание силы 0',
+  power1Name: 'Сила 1',
+  power1Description: 'Описание силы 1',
+  power2Name: 'Сила 2',
+  power2Description: 'Описание силы 2',
+  gods: 'Божества',
+  archetypeFeatures: 'Особенности архетипа',
+  infoLinks: 'Связанная информация',
+  book: 'Источник',
+  parentClass: 'Родительский класс',
+  prestigeClasses: 'Престиж-классы',
+  ability: 'Характеристика',
+  acNatural: 'Естественная броня',
+  acArmor: 'Броня',
+  acShield: 'Щит',
+  acDodge: 'Уклонение',
+  acDeflection: 'Отражение',
+  acInsight: 'Интуиция',
+  acRage: 'Ярость',
+  acWisdom: 'Мудрость к КБ',
+  acProfane: 'Нечестивый бонус к КБ',
+  acMonk: 'Монах к КБ',
+  maxAcDexterity: 'Макс. ЛВК к КБ',
+  combatManeuverBonus: 'БМ',
+  combatManeuverDefense: 'ЗМ',
+  combatManeuverDefenseComment: 'Комментарий ЗМ',
+}
+
+const DETAIL_ORDER = [
+  'engName',
+  'book',
+  'description',
+  'fullDescription',
+  'role',
+  'fullCreatureType',
+  'cr',
+  'exp',
+  'initiative',
+  'senses',
+  'perception',
+  'aura',
+  'acDescription',
+  'acNatural',
+  'acArmor',
+  'acShield',
+  'acDodge',
+  'acDeflection',
+  'hitPoints',
+  'hitPointsDescription',
+  'fortitude',
+  'reflex',
+  'will',
+  'defensiveAbilities',
+  'immune',
+  'resist',
+  'weaknesses',
+  'speed',
+  'meleeAttacks',
+  'rangedAttacks',
+  'specialAttacks',
+  'spellLikeAbilities',
+  'spellsPrepared',
+  'spellsKnown',
+  'strength',
+  'dexterity',
+  'constitution',
+  'intelligence',
+  'wisdom',
+  'charisma',
+  'baseAttack',
+  'cmb',
+  'cmd',
+  'combatManeuverBonus',
+  'combatManeuverDefense',
+  'feats',
+  'skills',
+  'languages',
+  'environment',
+  'organization',
+  'treasure',
+  'specialAbilities',
+  'physicalDescription',
+  'society',
+  'relations',
+  'alignmentAndReligion',
+  'adventurers',
+  'baseRaceTraits',
+  'alterRaceTraits',
+  'favoredClass',
+  'castingTime',
+  'components',
+  'school',
+  'subSchool',
+  'classes',
+  'range',
+  'target',
+  'area',
+  'effect',
+  'duration',
+  'savingThrow',
+  'spellResistance',
+  'requirements',
+  'prerequisites',
+  'benefit',
+  'normal',
+  'special',
+  'types',
+  'aura',
+  'cl',
+  'price',
+  'cost',
+  'weight',
+  'damageS',
+  'damageM',
+  'criticalRoll',
+  'criticalDamage',
+  'range',
+  'misfire',
+  'capacity',
+  'special',
+  'armorBonus',
+  'maxDexBonus',
+  'armorCheckPenalty',
+  'arcaneSpellFailureChance',
+  'speed30',
+  'speed20',
+  'constructionRequirements',
+  'constructionCost',
+  'statistics',
+  'destruction',
+  'power0Name',
+  'power0Description',
+  'power1Name',
+  'power1Description',
+  'power2Name',
+  'power2Description',
+  'gods',
+  'archetypeFeatures',
+  'tableFeatures',
+  'tableSpellCount',
+  'features',
+  'infoLinks',
+]
+
+function detailLabel(key: string) {
+  return DETAIL_LABELS[key] || key.replace(/([A-Z])/g, ' $1').replace(/^./, (letter) => letter.toLocaleUpperCase('ru'))
+}
+
+function isEmptyDetail(value: DetailValue | undefined) {
+  if (value == null || value === '') return true
+  if (Array.isArray(value)) return value.length === 0
+  if (typeof value === 'object') return Object.keys(value).length === 0
+  return false
+}
+
+function detailValueText(value: DetailValue, depth = 0): string {
+  if (value == null) return ''
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return compactText(value, depth > 1 ? 900 : 4000)
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => detailValueText(item, depth + 1))
+      .filter(Boolean)
+      .join('\n')
+  }
+
+  const named = value as Record<string, DetailValue>
+  if (named.name && Object.keys(named).length <= 5) {
+    const extra = [named.level != null && `${named.level}`, named.abbreviation, named.alias].filter(Boolean).join(' · ')
+    return `${detailValueText(named.name, depth + 1)}${extra ? ` (${extra})` : ''}`
+  }
+
+  return Object.entries(named)
+    .filter(([key, inner]) => !['id', 'alias', 'helpers', 'childs'].includes(key) && !isEmptyDetail(inner))
+    .map(([key, inner]) => `${detailLabel(key)}: ${detailValueText(inner, depth + 1)}`)
+    .join('\n')
+}
+
+function renderDetailValue(value: DetailValue) {
+  const text = detailValueText(value)
+  if (!text) return ''
+
+  return text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, 24)
+    .map((line) => `<p>${escapeHtml(line)}</p>`)
+    .join('')
+}
+
+function numberDetail(full: Record<string, DetailValue>, key: string) {
+  const value = full[key]
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function signed(value: number) {
+  return value > 0 ? `+${value}` : String(value)
+}
+
+function abilityMod(value: number | null) {
+  return value == null ? null : Math.floor((value - 10) / 2)
+}
+
+function creatureAcText(full: Record<string, DetailValue>) {
+  const explicit = plainText(full.acString || full.acDescription)
+  const dex = abilityMod(numberDetail(full, 'dexterity'))
+  const parts = [
+    dex != null && `ЛВК ${signed(dex)}`,
+    numberDetail(full, 'acArmor') != null && `броня ${signed(numberDetail(full, 'acArmor') || 0)}`,
+    numberDetail(full, 'acShield') != null && `щит ${signed(numberDetail(full, 'acShield') || 0)}`,
+    numberDetail(full, 'acNatural') != null && `естественная ${signed(numberDetail(full, 'acNatural') || 0)}`,
+    numberDetail(full, 'acDodge') != null && `уклонение ${signed(numberDetail(full, 'acDodge') || 0)}`,
+    numberDetail(full, 'acDeflection') != null && `отражение ${signed(numberDetail(full, 'acDeflection') || 0)}`,
+    numberDetail(full, 'acInsight') != null && `интуиция ${signed(numberDetail(full, 'acInsight') || 0)}`,
+    numberDetail(full, 'acWisdom') != null && `мудрость ${signed(numberDetail(full, 'acWisdom') || 0)}`,
+    numberDetail(full, 'acMonk') != null && `монах ${signed(numberDetail(full, 'acMonk') || 0)}`,
+    numberDetail(full, 'acRage') != null && `ярость ${signed(numberDetail(full, 'acRage') || 0)}`,
+    numberDetail(full, 'acProfane') != null && `нечестивый ${signed(numberDetail(full, 'acProfane') || 0)}`,
+  ].filter(Boolean)
+
+  return explicit || parts.join(', ')
+}
+
+function renderStatCards(item: ArchiveRecord) {
+  const full = item.full
+  if (!full) return ''
+
+  if (item.kind === 'Существо') {
+    const abilities = ([
+      ['СИЛ', numberDetail(full, 'strength')],
+      ['ЛВК', numberDetail(full, 'dexterity')],
+      ['ТЕЛ', numberDetail(full, 'constitution')],
+      ['ИНТ', numberDetail(full, 'intelligence')],
+      ['МДР', numberDetail(full, 'wisdom')],
+      ['ХАР', numberDetail(full, 'charisma')],
+    ] as const)
+      .filter(([, value]) => value != null)
+      .map(([label, value]) => `${label} ${value} (${signed(abilityMod(value) || 0)})`)
+      .join(' · ')
+
+    const cards = [
+      ['КР', full.cr],
+      ['HP', [full.hitPoints, plainText(full.hitPointsDescription)].filter(Boolean).join(' · ')],
+      ['КБ', creatureAcText(full)],
+      ['Инициатива', typeof full.initiative === 'number' ? signed(full.initiative) : full.initiative],
+      ['Спасброски', [`Ст ${full.fortitude ?? '-'}`, `Р ${full.reflex ?? '-'}`, `В ${full.will ?? '-'}`].join(' · ')],
+      ['Характеристики', abilities],
+      ['Бой', [`БМА ${full.baseAttack ?? '-'}`, `БМ ${full.cmb ?? full.combatManeuverBonus ?? '-'}`, `ЗМ ${full.cmd ?? full.combatManeuverDefense ?? '-'}`].join(' · ')],
+    ].filter(([, value]) => value != null && value !== '')
+
+    return `<div class="stat-strip">${cards.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div>`
+  }
+
+  if (['Оружие', 'Броня', 'Снаряжение', 'Волшебный предмет'].includes(item.kind)) {
+    const cards = [
+      ['Цена', full.price ?? full.cost],
+      ['Вес', full.weight],
+      ['Урон', [full.damageS && `S ${full.damageS}`, full.damageM && `M ${full.damageM}`].filter(Boolean).join(' · ')],
+      ['Крит', [full.criticalRoll, full.criticalDamage && `x${full.criticalDamage}`].filter(Boolean).join(' / ')],
+      ['Броня', full.armorBonus],
+      ['Макс. ЛВК', full.maxDexBonus],
+      ['Штраф', full.armorCheckPenalty],
+    ].filter(([, value]) => value != null && value !== '')
+
+    return cards.length ? `<div class="stat-strip">${cards.map(([label, value]) => `<div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('')}</div>` : ''
+  }
+
+  return ''
+}
+
+function renderFullInfo(item: ArchiveRecord) {
+  const full = item.full
+  if (!full) return ''
+
+  const keys = [
+    ...DETAIL_ORDER.filter((key) => key in full),
+    ...Object.keys(full).filter((key) => !DETAIL_ORDER.includes(key)),
+  ].filter((key, index, array) => array.indexOf(key) === index && !['id', 'alias', 'name', 'helpers'].includes(key) && !isEmptyDetail(full[key]))
+
+  return `
+    <section class="full-info">
+      <div class="section-heading">
+        <span>Полные данные</span>
+        <b>${keys.length}</b>
+      </div>
+      ${renderStatCards(item)}
+      <div class="full-info-grid">
+        ${keys
+          .map((key) => {
+            const content = renderDetailValue(full[key])
+            return content
+              ? `
+                <article class="detail-block">
+                  <h3>${escapeHtml(detailLabel(key))}</h3>
+                  ${content}
+                </article>
+              `
+              : ''
+          })
+          .join('')}
+      </div>
+    </section>
   `
 }
 
@@ -774,6 +1389,7 @@ function renderDiceView() {
           <b>${displayNotation}</b>
         </div>
         <div class="${trayClass}" aria-live="polite">
+          <div id="physicsDiceBox" class="physics-dice-box" aria-hidden="true"></div>
           <span class="tray-grid" aria-hidden="true"></span>
           <span class="tray-impact one" aria-hidden="true"></span>
           <span class="tray-impact two" aria-hidden="true"></span>
@@ -817,16 +1433,7 @@ function renderDiceView() {
           <b>${state.rolls.length}</b>
         </div>
         <div class="roll-history">
-          ${state.rolls
-            .map(
-              (roll) => `
-                <div>
-                  <strong>${roll.total}</strong>
-                  <span>${escapeHtml(roll.notation)} · ${escapeHtml(roll.createdAt)}</span>
-                </div>
-              `,
-            )
-            .join('')}
+          ${state.rolls.map(renderRollHistoryRow).join('')}
         </div>
       </div>
     </section>
@@ -906,6 +1513,12 @@ function render() {
       state.focusSearch = false
     })
   }
+
+  if (state.view === 'dice') {
+    requestAnimationFrame(() => {
+      void ensureDiceBox()
+    })
+  }
 }
 
 function kindGlyph(kind: string) {
@@ -922,8 +1535,22 @@ function kindGlyph(kind: string) {
       return '✦'
     case 'Волшебный предмет':
       return '◈'
+    case 'Оружие':
+      return '⚔'
+    case 'Броня':
+      return '▰'
+    case 'Снаряжение':
+      return '◧'
     case 'Существо':
       return '♜'
+    case 'Трейт':
+      return '✣'
+    case 'Домен':
+    case 'Поддомен':
+    case 'Инквизиция':
+      return '◌'
+    case 'Архетип':
+      return '⌁'
     default:
       return '◇'
   }
@@ -955,7 +1582,7 @@ function saveRecordForm(formElement: HTMLFormElement) {
   const form = new FormData(formElement)
   const id = getFormString(form, 'id') || uid('record')
   const kind = getFormString(form, 'kind') || 'Домашнее правило'
-  const existing = byId(id)
+  const existing = state.records.find((item) => item.id === id)
   const updated: ArchiveRecord = {
     id,
     kind,
@@ -969,6 +1596,8 @@ function saveRecordForm(formElement: HTMLFormElement) {
       .filter(Boolean),
     sourceUrl: existing?.sourceUrl || '/local/homebrew',
     accent: accentFor(kind),
+    full: existing?.full || null,
+    fullText: existing?.fullText || getFormString(form, 'details'),
   }
 
   const index = state.records.findIndex((item) => item.id === id)
@@ -1162,10 +1791,10 @@ async function bootstrap() {
   try {
     const response = await fetch(SEED_PATH)
     const seed = (await response.json()) as SeedPayload
-    const storedRecords = readStorage<ArchiveRecord[] | null>(STORAGE.records, null)
+    const storedRecordEdits = readStorage<ArchiveRecord[] | null>(STORAGE.records, null)
 
     state.seed = seed
-    state.records = storedRecords?.length ? storedRecords : seed.records
+    state.records = mergeRecordEdits(seed.records, storedRecordEdits)
     state.characters = readStorage<Character[]>(STORAGE.characters, [DEFAULT_CHARACTER])
     state.selectedCharacterId = state.characters[0]?.id || ''
     state.favourites = readStorage<string[]>(STORAGE.favourites, [])

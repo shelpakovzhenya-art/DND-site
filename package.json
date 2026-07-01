@@ -11,5 +11,8 @@
   },
   "devDependencies": {
     "vite": "latest"
+  },
+  "dependencies": {
+    "@3d-dice/dice-box-threejs": "^0.0.12"
   }
 }

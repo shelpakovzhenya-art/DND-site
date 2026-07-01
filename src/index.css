@@ -917,6 +917,76 @@ label > span {
   font-size: 12px;
 }
 
+.full-info {
+  display: grid;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(76, 139, 180, 0.22);
+}
+
+.full-info-grid {
+  display: grid;
+  gap: 8px;
+  max-height: 680px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.stat-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.stat-strip div {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(32, 214, 255, 0.24);
+  border-radius: 8px;
+  background: rgba(4, 18, 32, 0.64);
+}
+
+.stat-strip span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.stat-strip strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: #f3f8ff;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.detail-block {
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+  border: 1px solid rgba(76, 139, 180, 0.24);
+  border-radius: 8px;
+  background: rgba(3, 11, 21, 0.42);
+}
+
+.detail-block h3 {
+  margin: 0;
+  color: #d5c4ff;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.detail-block p {
+  margin: 0;
+  color: #cfdae9;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .rail-panel {
   min-width: 0;
 }
@@ -1224,6 +1294,40 @@ label > span {
     0 16px 60px rgba(0, 0, 0, 0.22);
   perspective: 900px;
   transform-style: preserve-3d;
+}
+
+.physics-dice-box {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+
+.physics-dice-box.ready {
+  opacity: 1;
+}
+
+.physics-dice-box canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.dice-tray.physics-ready .thrown-die,
+.dice-tray.physics-ready .die-shadow,
+.dice-tray.physics-ready .tray-impact {
+  opacity: 0;
+}
+
+.dice-tray.physics-ready.rolling .roll-readout strong {
+  animation: none;
+  opacity: 0;
+}
+
+.dice-tray.physics-ready .roll-readout {
+  z-index: 6;
 }
 
 .tray-grid {
@@ -1922,6 +2026,7 @@ label > span {
   .archive-grid,
   .sheet-grid,
   .abilities,
+  .stat-strip,
   .hero-stats {
     grid-template-columns: 1fr;
   }
